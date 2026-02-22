@@ -43,24 +43,20 @@ services:
     build:
       context: ../ketchup-backend
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    env_file:
+      - ./.env
     volumes:
       - ../ketchup-backend:/app
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
       VLLM_BASE_URL: http://local-llm:8080/v1
-      VLLM_MODEL: Qwen/Qwen3-4B-Instruct
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct}
+      PLANNER_FALLBACK_ENABLED: ${PLANNER_FALLBACK_ENABLED:-true}
+      BACKEND_INTERNAL_API_KEY: ${BACKEND_INTERNAL_API_KEY:-dev-internal-key-change-me}
       CORS_ORIGINS: '["http://localhost:3001","http://frontend:3001"]'
-      # ── NEW: SMTP for invite emails ──
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
-      FRONTEND_URL: http://localhost:3001
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
       # No more GOOGLE_CLIENT_ID/SECRET here — calendar is removed
-    command: uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       db:
         condition: service_healthy
@@ -69,54 +65,48 @@ services:
   frontend:
     image: node:22-alpine
     working_dir: /app
+    env_file:
+      - ./.env
     ports:
       - "3001:3001"
     volumes:
       - ../ketchup-frontend:/app
       - frontend_node_modules:/app/node_modules
     environment:
-      # Auth.js needs these
-      AUTH_SECRET: ${AUTH_SECRET}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       AUTH_URL: http://localhost:3001
       # Tell Auth.js what URL users see (for callback URLs)
       NEXTAUTH_URL: http://localhost:3001
       # Tell the proxy where the backend is (Docker network)
       BACKEND_URL: http://backend:8000
+      BACKEND_INTERNAL_API_KEY: ${BACKEND_INTERNAL_API_KEY:-dev-internal-key-change-me}
       WATCHPACK_POLLING: "true"
     command: sh -c "npm install && npm run dev"
     depends_on:
       - backend
     restart: unless-stopped
 
-    # ---------------------------------------------------------------------------
-    # (OPTIONAL) Local LLM via llama.cpp — uncomment when you're ready to test
-    # real LLM integration. Requires downloading the GGUF model first.
-    #
-    # Setup:
-    #   mkdir -p models
-    #   huggingface-cli download Qwen/Qwen3-4B-Instruct-GGUF \
-    #     qwen3-4b-instruct-q4_k_m.gguf --local-dir ./models
-    # ---------------------------------------------------------------------------
-    # local-llm:
-    #   image: ghcr.io/ggml-org/llama.cpp:server
-    #   ports:
-    #     - "8080:8080"
-    #   volumes:
-    #     - ./models:/models
-    #   command: >
-    #     --model /models/qwen3-4b-instruct-q4_k_m.gguf
-    #     --host 0.0.0.0
-    #     --port 8080
-    #     --ctx-size 4096
-    #     --n-predict 2048
-    #   healthcheck:
-    #     test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-    #     interval: 10s
-    #     start_period: 60s
-    #     timeout: 5s
-    #     retries: 10
+  # Optional local LLM profile. Start with:
+  #   docker compose --profile llm up
+  local-llm:
+    profiles: ["llm"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models
+    command: >
+      --model /models/qwen3-4b-instruct-q4_k_m.gguf
+      --host 0.0.0.0
+      --port 8080
+      --jinja
+      --ctx-size 4096
+      --n-predict 2048
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      start_period: 60s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pgdata:

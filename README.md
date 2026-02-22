@@ -22,6 +22,7 @@ This folder orchestrates the full Ketchup stack using Docker Compose, pulling fr
 
 - **Docker** and **Docker Compose** (v2) installed
 - Both repos cloned as siblings to this folder
+- Google Maps server key with **Places API (New)** and **Routes API** enabled
 
 ## Quick Start
 
