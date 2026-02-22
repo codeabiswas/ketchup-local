@@ -16,7 +16,6 @@ This folder orchestrates the full Ketchup stack using Docker Compose, pulling fr
     └── db/
         └── init/
             ├── 01_schema.sql
-            └── 02_add_password.sql
 ```
 
 ## Prerequisites
@@ -35,6 +34,10 @@ git clone <your-backend-repo> ketchup-backend
 # 2. Set up this folder
 cd ketchup-local
 cp .env.example .env
+
+# 3. Copy your SQL migration files into db/init/
+#    (These run automatically on first database creation)
+cp ../ketchup-backend/database/migrations/01_schema.sql db/init/
 
 # 4. Start everything
 docker compose up
