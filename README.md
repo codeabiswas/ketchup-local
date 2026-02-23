@@ -29,6 +29,8 @@ This folder assumes `ketchup-local`, `ketchup-backend`, and `ketchup-frontend` a
   - `GOOGLE_MAPS_API_KEY` with:
     - Places API (New)
     - Routes API
+  - Optional web fallback:
+    - `TAVILY_API_KEY` (Tavily API key)
 
 ## Setup
 
@@ -89,7 +91,45 @@ docker compose down -v
 - Backend points to `VLLM_BASE_URL=http://local-llm:8080/v1`.
 - If local LLM is unavailable, plan generation may fail or rely on fallback behavior depending on `PLANNER_FALLBACK_ENABLED`.
 - If `GOOGLE_MAPS_API_KEY` is missing, planner runs without tool grounding.
+- If `TAVILY_API_KEY` is set, planner enables web fallback when maps search returns no venues.
+- `web_search` is fallback-only. If maps already returns usable venues, planner may not call Tavily in that run.
 - If Maps key exists but APIs are not enabled, generation can still fail on tool calls.
+
+## Verify Tavily Integration
+
+1. Restart backend after updating `.env`:
+
+```bash
+docker compose restart backend
+```
+
+2. Smoke-test web tool directly in backend container:
+
+```bash
+cat > /tmp/tavily_test.py <<'PY'
+import asyncio, json
+import agents.planning as planning
+
+out = asyncio.run(
+    planning._web_search(
+        query="group activities for friends",
+        location="Boston, MA",
+        max_results=3,
+    )
+)
+print("ERROR:", out.get("error"))
+print("RESULT_COUNT:", len(out.get("results", [])))
+print(json.dumps(out.get("results", [])[:2], indent=2))
+PY
+
+docker compose exec -T backend env PYTHONPATH=/app python /dev/stdin < /tmp/tavily_test.py
+```
+
+3. End-to-end plan generation and tool summary logs:
+
+```bash
+docker compose logs backend --since=15m | rg "Planner tool summary|web_calls|web_results|web-grounded fallback|Planner invoking tool 'web_search'"
+```
 
 ## Common Issues
 
