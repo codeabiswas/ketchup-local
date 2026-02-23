@@ -17,6 +17,7 @@ This folder assumes `ketchup-local`, `ketchup-backend`, and `ketchup-frontend` a
 - Postgres host port: `localhost:5433`
 
 `docker compose --profile llm up` additionally starts:
+- one-shot model init/downloader (`llm-model-init`)
 - Local LLM endpoint: `http://localhost:8080/v1`
 
 ## Prerequisites
@@ -45,20 +46,10 @@ docker compose up --build
 
 ## Optional: Local LLM Profile
 
-The compose file expects model file:
-- `ketchup-local/models/qwen3-4b-instruct-q4_k_m.gguf`
-
-One working way to download:
-
-```bash
-cd ketchup-local
-mkdir -p models
-uvx --from huggingface_hub hf download \
-  WariHima/Qwen3-4B-Instruct-2507-Q4_K_M-GGUF \
-  qwen3-4b-instruct-2507-q4_k_m.gguf \
-  --local-dir ./models
-ln -sf qwen3-4b-instruct-2507-q4_k_m.gguf models/qwen3-4b-instruct-q4_k_m.gguf
-```
+The llm profile now auto-manages model bootstrap:
+- checks `./models/${LLM_HF_FILENAME}`
+- downloads from `${LLM_HF_REPO}` only if missing
+- creates/updates symlink `./models/${LLM_LOCAL_MODEL_LINK}`
 
 Then run:
 
@@ -71,6 +62,14 @@ Quick checks:
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/v1/models
+```
+
+If you want a different model file/repo, override in `.env`:
+
+```bash
+LLM_HF_REPO=<hf-repo>
+LLM_HF_FILENAME=<file.gguf>
+LLM_LOCAL_MODEL_LINK=<symlink-name.gguf>
 ```
 
 ## Useful Commands
@@ -103,5 +102,5 @@ docker compose --profile llm up --build --force-recreate
 
 `POST /generate-plans` returns 502:
 - Check backend logs and local-llm logs.
-- Verify model file exists at expected path.
+- Check `llm-model-init` logs to confirm download/symlink.
 - Verify Maps key and API enablement if using tool grounding.

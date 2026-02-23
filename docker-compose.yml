@@ -87,6 +87,57 @@ services:
 
   # Optional local LLM profile. Start with:
   #   docker compose --profile llm up
+  llm-model-init:
+    profiles: ["llm"]
+    image: python:3.12-slim
+    volumes:
+      - ./models:/models
+    environment:
+      LLM_HF_REPO: ${LLM_HF_REPO:-WariHima/Qwen3-4B-Instruct-2507-Q4_K_M-GGUF}
+      LLM_HF_FILENAME: ${LLM_HF_FILENAME:-qwen3-4b-instruct-2507-q4_k_m.gguf}
+      LLM_LOCAL_MODEL_LINK: ${LLM_LOCAL_MODEL_LINK:-qwen3-4b-instruct-q4_k_m.gguf}
+      HUGGINGFACE_HUB_TOKEN: ${HUGGINGFACE_HUB_TOKEN:-}
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+        python -m pip install --no-cache-dir --quiet huggingface_hub
+        python - <<'PY'
+        import os
+        from pathlib import Path
+        from huggingface_hub import hf_hub_download
+
+        models_dir = Path("/models")
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        repo = os.environ["LLM_HF_REPO"]
+        filename = os.environ["LLM_HF_FILENAME"]
+        link_name = os.environ["LLM_LOCAL_MODEL_LINK"]
+        token = os.environ.get("HUGGINGFACE_HUB_TOKEN") or None
+
+        target = models_dir / filename
+        if target.exists() and target.stat().st_size > 0:
+            print(f"Model already present: {target}")
+        else:
+            print(f"Model missing. Downloading {repo}/{filename} ...")
+            hf_hub_download(
+                repo_id=repo,
+                filename=filename,
+                local_dir=str(models_dir),
+                local_dir_use_symlinks=False,
+                token=token,
+            )
+            print(f"Downloaded {filename} into {models_dir}")
+
+        link = models_dir / link_name
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(filename)
+        print(f"Symlink ready: {link} -> {filename}")
+        PY
+        ls -lh /models/*.gguf
+
   local-llm:
     profiles: ["llm"]
     image: ghcr.io/ggml-org/llama.cpp:server
@@ -94,8 +145,11 @@ services:
       - "8080:8080"
     volumes:
       - ./models:/models
+    depends_on:
+      llm-model-init:
+        condition: service_completed_successfully
     command: >
-      --model /models/qwen3-4b-instruct-q4_k_m.gguf
+      --model /models/${LLM_LOCAL_MODEL_LINK:-qwen3-4b-instruct-q4_k_m.gguf}
       --host 0.0.0.0
       --port 8080
       --jinja
