@@ -1,25 +1,4 @@
-# =============================================================================
-# Ketchup Local Development - Docker Compose
-# =============================================================================
-# This file lives OUTSIDE the frontend/backend repos, in a sibling directory.
-#
-# Expected folder structure:
-#   ~/projects/
-#   ├── ketchup-frontend/       ← your Next.js repo
-#   ├── ketchup-backend/        ← your FastAPI repo
-#   └── ketchup-local/          ← THIS folder
-#       ├── docker-compose.yml  ← THIS file
-#       ├── .env                ← secrets (git-ignored)
-#       └── db/
-#           └── init/
-#               ├── 01_schema.sql
-#
-# Usage:
-#   cd ketchup-local
-#   docker compose up           ← starts frontend + backend + db
-#   docker compose up --build   ← rebuilds images after dependency changes
-#   docker compose down -v      ← stops everything + removes db volume (fresh start)
-# =============================================================================
+# Local development stack: db + backend + frontend + optional vLLM profile.
 
 services:
   db:
@@ -49,13 +28,15 @@ services:
       - ../ketchup-backend:/app
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/appdb
-      VLLM_BASE_URL: http://local-llm:8080/v1
-      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://vllm-local:8080/v1}
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}
+      VLLM_API_KEY: ${VLLM_API_KEY:-EMPTY}
+      PLANNER_NOVELTY_TARGET_GENERATE: ${PLANNER_NOVELTY_TARGET_GENERATE:-0.7}
+      PLANNER_NOVELTY_TARGET_REFINE: ${PLANNER_NOVELTY_TARGET_REFINE:-0.35}
       PLANNER_FALLBACK_ENABLED: ${PLANNER_FALLBACK_ENABLED:-true}
       BACKEND_INTERNAL_API_KEY: ${BACKEND_INTERNAL_API_KEY:-dev-internal-key-change-me}
       CORS_ORIGINS: '["http://localhost:3001","http://frontend:3001"]'
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
-      # No more GOOGLE_CLIENT_ID/SECRET here — calendar is removed
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       db:
@@ -74,9 +55,7 @@ services:
       - frontend_node_modules:/app/node_modules
     environment:
       AUTH_URL: http://localhost:3001
-      # Tell Auth.js what URL users see (for callback URLs)
       NEXTAUTH_URL: http://localhost:3001
-      # Tell the proxy where the backend is (Docker network)
       BACKEND_URL: http://backend:8000
       BACKEND_INTERNAL_API_KEY: ${BACKEND_INTERNAL_API_KEY:-dev-internal-key-change-me}
       WATCHPACK_POLLING: "true"
@@ -85,76 +64,102 @@ services:
       - backend
     restart: unless-stopped
 
-  # Optional local LLM profile. Start with:
-  #   docker compose --profile llm up
-  llm-model-init:
-    profiles: ["llm"]
-    image: python:3.12-slim
-    volumes:
-      - ./models:/models
-    environment:
-      LLM_HF_REPO: ${LLM_HF_REPO:-WariHima/Qwen3-4B-Instruct-2507-Q4_K_M-GGUF}
-      LLM_HF_FILENAME: ${LLM_HF_FILENAME:-qwen3-4b-instruct-2507-q4_k_m.gguf}
-      LLM_LOCAL_MODEL_LINK: ${LLM_LOCAL_MODEL_LINK:-qwen3-4b-instruct-q4_k_m.gguf}
-      HUGGINGFACE_HUB_TOKEN: ${HUGGINGFACE_HUB_TOKEN:-}
+  # Optional local vLLM profiles:
+  # docker compose --profile llm-apple up --build
+  # docker compose --profile llm-nvidia up --build
+  # docker compose --profile llm-rocm up --build
+  vllm-apple-bridge:
+    profiles: ["llm-apple"]
+    image: alpine/socat:latest
     command:
-      - sh
-      - -lc
-      - |
-        set -eu
-        python -m pip install --no-cache-dir --quiet huggingface_hub
-        python - <<'PY'
-        import os
-        from pathlib import Path
-        from huggingface_hub import hf_hub_download
+      - tcp-listen:8080,fork,reuseaddr
+      - tcp-connect:host.docker.internal:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        aliases:
+          - vllm-local
+    healthcheck:
+      test: ["CMD", "nc", "-z", "host.docker.internal", "8080"]
+      interval: 10s
+      start_period: 5s
+      timeout: 3s
+      retries: 20
 
-        models_dir = Path("/models")
-        models_dir.mkdir(parents=True, exist_ok=True)
-
-        repo = os.environ["LLM_HF_REPO"]
-        filename = os.environ["LLM_HF_FILENAME"]
-        link_name = os.environ["LLM_LOCAL_MODEL_LINK"]
-        token = os.environ.get("HUGGINGFACE_HUB_TOKEN") or None
-
-        target = models_dir / filename
-        if target.exists() and target.stat().st_size > 0:
-            print(f"Model already present: {target}")
-        else:
-            print(f"Model missing. Downloading {repo}/{filename} ...")
-            hf_hub_download(
-                repo_id=repo,
-                filename=filename,
-                local_dir=str(models_dir),
-                local_dir_use_symlinks=False,
-                token=token,
-            )
-            print(f"Downloaded {filename} into {models_dir}")
-
-        link = models_dir / link_name
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(filename)
-        print(f"Symlink ready: {link} -> {filename}")
-        PY
-        ls -lh /models/*.gguf
-
-  local-llm:
-    profiles: ["llm"]
-    image: ghcr.io/ggml-org/llama.cpp:server
+  vllm-nvidia:
+    profiles: ["llm-nvidia"]
+    image: vllm/vllm-openai:latest
+    gpus: all
     ports:
       - "8080:8080"
+    shm_size: "8gb"
     volumes:
-      - ./models:/models
-    depends_on:
-      llm-model-init:
-        condition: service_completed_successfully
-    command: >
-      --model /models/${LLM_LOCAL_MODEL_LINK:-qwen3-4b-instruct-q4_k_m.gguf}
-      --host 0.0.0.0
-      --port 8080
-      --jinja
-      --ctx-size 4096
-      --n-predict 2048
+      - ./models/hf-cache:/root/.cache/huggingface
+    networks:
+      default:
+        aliases:
+          - vllm-local
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - --model
+      - ${VLLM_MODEL_HF_ID:-Qwen/Qwen3-4B-Instruct-2507}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-4096}
+      - --max-num-seqs
+      - ${VLLM_MAX_NUM_SEQS:-4}
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - ${VLLM_TOOL_CALL_PARSER:-hermes}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      start_period: 60s
+      timeout: 5s
+      retries: 10
+
+  vllm-rocm:
+    profiles: ["llm-rocm"]
+    image: vllm/vllm-openai-rocm:latest
+    group_add:
+      - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    ports:
+      - "8080:8080"
+    shm_size: "8gb"
+    volumes:
+      - ./models/hf-cache:/root/.cache/huggingface
+    networks:
+      default:
+        aliases:
+          - vllm-local
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - --model
+      - ${VLLM_MODEL_HF_ID:-Qwen/Qwen3-4B-Instruct-2507}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-4096}
+      - --max-num-seqs
+      - ${VLLM_MAX_NUM_SEQS:-4}
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - ${VLLM_TOOL_CALL_PARSER:-hermes}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
