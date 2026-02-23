@@ -1,81 +1,138 @@
-# 🍅 Ketchup Local Development
+# Ketchup Local
 
-This folder orchestrates the full Ketchup stack using Docker Compose, pulling from the separate frontend and backend repositories.
+Docker Compose setup for local development.
 
-## Folder Structure
+Services:
+- `db` (PostgreSQL)
+- `backend` (FastAPI)
+- `frontend` (Next.js)
+- optional vLLM profiles
 
-```
-~/projects/
-├── ketchup-frontend/       ← Next.js repo (must exist)
-├── ketchup-backend/        ← FastAPI repo (must exist)
-└── ketchup-local/          ← THIS folder
-    ├── docker-compose.yml
-    ├── .env.example
-    ├── .env                ← your local secrets (git-ignored)
-    ├── README.md
-    └── db/
-        └── init/
-            ├── 01_schema.sql
-```
+Assumes sibling directories:
+- `ketchup-local`
+- `ketchup-backend`
+- `ketchup-frontend`
 
-## Prerequisites
-
-- **Docker** and **Docker Compose** (v2) installed
-- Both repos cloned as siblings to this folder
-
-## Quick Start
+## Start
 
 ```bash
-# 1. Clone repos side by side (if you haven't already)
-cd ~/projects
-git clone <your-frontend-repo> ketchup-frontend
-git clone <your-backend-repo> ketchup-backend
-
-# 2. Set up this folder
 cd ketchup-local
-cp .env.example .env
-
-# 3. Copy your SQL migration files into db/init/
-#    (These run automatically on first database creation)
-cp ../ketchup-backend/database/migrations/01_schema.sql db/init/
-
-# 4. Start everything
-docker compose up
-
-# 5. Open the app
-#    Frontend: http://localhost:3001
-#    Backend API docs: http://localhost:8000/docs
-#    Database: localhost:5433 (user: postgres, pass: postgres, db: appdb)
+cp env.example .env
+# edit .env
 ```
 
-## Common Commands
+Base stack:
 
 ```bash
-# Start in background
-docker compose up -d
-
-# Rebuild after changing requirements.txt or package.json
 docker compose up --build
+```
 
-# View logs for one service
+With local vLLM:
+
+```bash
+docker compose --profile llm-apple up --build
+# or
+docker compose --profile llm-nvidia up --build
+# or
+docker compose --profile llm-rocm up --build
+```
+
+## Endpoints
+
+- Frontend: `http://localhost:3001`
+- Backend: `http://localhost:8000`
+- Backend docs: `http://localhost:8000/docs`
+- Postgres: `localhost:5433`
+- vLLM: `http://localhost:8080/v1` (when LLM profile is running)
+
+## vLLM Configuration
+
+Important env vars:
+- `VLLM_BASE_URL`
+- `VLLM_MODEL`
+- `VLLM_API_KEY`
+- `VLLM_MODEL_HF_ID`
+- `VLLM_MAX_MODEL_LEN`
+- `VLLM_MAX_NUM_SEQS`
+- `VLLM_ENABLE_AUTO_TOOL_CHOICE`
+- `VLLM_TOOL_CALL_PARSER`
+- `HF_TOKEN` (for gated/private models)
+
+Planner behavior controls:
+- `PLANNER_NOVELTY_TARGET_GENERATE`
+- `PLANNER_NOVELTY_TARGET_REFINE`
+- `PLANNER_FALLBACK_ENABLED`
+
+Tool keys:
+- `GOOGLE_MAPS_API_KEY`
+- `TAVILY_API_KEY`
+
+## Apple Profile
+
+`llm-apple` expects host-local vLLM on port `8080`, then bridges from Compose network.
+
+Start host vLLM:
+
+```bash
+cd ketchup-local
+./scripts/start-host-vllm.sh
+```
+
+Then run Compose in another shell:
+
+```bash
+cd ketchup-local
+docker compose --profile llm-apple up --build
+```
+
+## Useful Commands
+
+```bash
 docker compose logs -f backend
-
-# Stop everything
+docker compose logs -f frontend
+docker compose logs -f vllm-apple-bridge
+docker compose logs -f vllm-nvidia
+docker compose logs -f vllm-rocm
+docker compose restart backend
 docker compose down
-
-# Nuclear reset (wipes database)
 docker compose down -v
 ```
 
-## How Networking Works
+## Quick Checks
 
-Inside Docker, services talk to each other by **service name**:
-- Frontend calls backend at `http://backend:8000` (via Next.js API proxy)
-- Backend calls database at `postgresql://postgres:postgres@db:5432/appdb`
+vLLM health:
 
-From your **browser**, you access services via published ports:
-- Frontend: `http://localhost:3001`
-- Backend: `http://localhost:8000`
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/v1/models
+```
 
-The Next.js API proxy (`/api/[...path]/route.ts`) bridges this gap — browser JS
-calls `/api/something`, Next.js server-side code forwards it to `http://backend:8000/api/something`.
+Tavily smoke test:
+
+```bash
+cat >/tmp/tavily_test.py <<'PY'
+import asyncio, json
+import agents.planning as planning
+
+out = asyncio.run(
+    planning._web_search(
+        query="group activities for friends",
+        location="Boston, MA",
+        max_results=3,
+    )
+)
+print("ERROR:", out.get("error"))
+print("RESULT_COUNT:", len(out.get("results", [])))
+print(json.dumps(out.get("results", [])[:2], indent=2))
+PY
+
+docker compose exec -T backend env PYTHONPATH=/app python /dev/stdin < /tmp/tavily_test.py
+```
+
+## Troubleshooting
+
+If plan generation returns `502`:
+- check backend logs for planner/tool errors
+- check active vLLM service logs for startup/model issues
+- verify `GOOGLE_MAPS_API_KEY` for maps grounding
+- verify `TAVILY_API_KEY` for web fallback
