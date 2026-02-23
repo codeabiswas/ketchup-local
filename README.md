@@ -1,82 +1,107 @@
-# 🍅 Ketchup Local Development
+# Ketchup Local
 
-This folder orchestrates the full Ketchup stack using Docker Compose, pulling from the separate frontend and backend repositories.
+Local Docker Compose setup for the full Ketchup stack:
+- `db` (PostgreSQL)
+- `backend` (FastAPI)
+- `frontend` (Next.js)
+- optional `local-llm` profile (llama.cpp OpenAI-compatible server)
 
-## Folder Structure
+This folder assumes `ketchup-local`, `ketchup-backend`, and `ketchup-frontend` are sibling folders.
 
-```
-~/projects/
-├── ketchup-frontend/       ← Next.js repo (must exist)
-├── ketchup-backend/        ← FastAPI repo (must exist)
-└── ketchup-local/          ← THIS folder
-    ├── docker-compose.yml
-    ├── .env.example
-    ├── .env                ← your local secrets (git-ignored)
-    ├── README.md
-    └── db/
-        └── init/
-            ├── 01_schema.sql
-```
+## What It Runs
+
+`docker compose up` starts:
+- Frontend: `http://localhost:3001`
+- Backend API: `http://localhost:8000`
+- Backend docs: `http://localhost:8000/docs`
+- Postgres host port: `localhost:5433`
+
+`docker compose --profile llm up` additionally starts:
+- Local LLM endpoint: `http://localhost:8080/v1`
 
 ## Prerequisites
 
-- **Docker** and **Docker Compose** (v2) installed
-- Both repos cloned as siblings to this folder
-- Google Maps server key with **Places API (New)** and **Routes API** enabled
+- Docker Desktop (Compose v2)
+- Google OAuth web credentials (used by frontend sign-in)
+- `AUTH_SECRET` for Auth.js
+- Optional for tool-grounded planning:
+  - `GOOGLE_MAPS_API_KEY` with:
+    - Places API (New)
+    - Routes API
 
-## Quick Start
+## Setup
 
 ```bash
-# 1. Clone repos side by side (if you haven't already)
-cd ~/projects
-git clone <your-frontend-repo> ketchup-frontend
-git clone <your-backend-repo> ketchup-backend
-
-# 2. Set up this folder
 cd ketchup-local
-cp .env.example .env
-
-# 3. Copy your SQL migration files into db/init/
-#    (These run automatically on first database creation)
-cp ../ketchup-backend/database/migrations/01_schema.sql db/init/
-
-# 4. Start everything
-docker compose up
-
-# 5. Open the app
-#    Frontend: http://localhost:3001
-#    Backend API docs: http://localhost:8000/docs
-#    Database: localhost:5433 (user: postgres, pass: postgres, db: appdb)
+cp env.example .env
+# Fill required values in .env (OAuth + AUTH_SECRET at minimum)
 ```
 
-## Common Commands
+Start base stack:
 
 ```bash
-# Start in background
-docker compose up -d
-
-# Rebuild after changing requirements.txt or package.json
 docker compose up --build
+```
 
-# View logs for one service
+## Optional: Local LLM Profile
+
+The compose file expects model file:
+- `ketchup-local/models/qwen3-4b-instruct-q4_k_m.gguf`
+
+One working way to download:
+
+```bash
+cd ketchup-local
+mkdir -p models
+uvx --from huggingface_hub hf download \
+  WariHima/Qwen3-4B-Instruct-2507-Q4_K_M-GGUF \
+  qwen3-4b-instruct-2507-q4_k_m.gguf \
+  --local-dir ./models
+ln -sf qwen3-4b-instruct-2507-q4_k_m.gguf models/qwen3-4b-instruct-q4_k_m.gguf
+```
+
+Then run:
+
+```bash
+docker compose --profile llm up --build
+```
+
+Quick checks:
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/v1/models
+```
+
+## Useful Commands
+
+```bash
+docker compose up -d
 docker compose logs -f backend
-
-# Stop everything
+docker compose logs -f frontend
+docker compose logs -f local-llm
+docker compose restart backend
 docker compose down
-
-# Nuclear reset (wipes database)
 docker compose down -v
 ```
 
-## How Networking Works
+## Notes About Planning Runtime
 
-Inside Docker, services talk to each other by **service name**:
-- Frontend calls backend at `http://backend:8000` (via Next.js API proxy)
-- Backend calls database at `postgresql://postgres:postgres@db:5432/appdb`
+- Backend points to `VLLM_BASE_URL=http://local-llm:8080/v1`.
+- If local LLM is unavailable, plan generation may fail or rely on fallback behavior depending on `PLANNER_FALLBACK_ENABLED`.
+- If `GOOGLE_MAPS_API_KEY` is missing, planner runs without tool grounding.
+- If Maps key exists but APIs are not enabled, generation can still fail on tool calls.
 
-From your **browser**, you access services via published ports:
-- Frontend: `http://localhost:3001`
-- Backend: `http://localhost:8000`
+## Common Issues
 
-The Next.js API proxy (`/api/[...path]/route.ts`) bridges this gap — browser JS
-calls `/api/something`, Next.js server-side code forwards it to `http://backend:8000/api/something`.
+`network ... not found` while bringing stack up:
+
+```bash
+docker compose down --remove-orphans
+docker compose --profile llm up --build --force-recreate
+```
+
+`POST /generate-plans` returns 502:
+- Check backend logs and local-llm logs.
+- Verify model file exists at expected path.
+- Verify Maps key and API enablement if using tool grounding.
