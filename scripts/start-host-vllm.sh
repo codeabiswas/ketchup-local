@@ -20,8 +20,12 @@ fi
 
 if [ -z "${VLLM_BIN}" ]; then
   echo "vLLM not found on host (no 'vllm' CLI and no importable Python module)." >&2
-  echo "Install host vLLM first (Apple Silicon recommended: vllm-metal installer)," >&2
-  echo "then rerun this script." >&2
+  echo "Install host vLLM first, then rerun this script." >&2
+  echo "Example for Apple Silicon:" >&2
+  echo "  python3 -m venv ~/.venv-vllm-metal" >&2
+  echo "  source ~/.venv-vllm-metal/bin/activate" >&2
+  echo "  pip install -U pip vllm vllm-metal huggingface_hub" >&2
+  echo "  hf auth login   # if model is gated/private" >&2
   echo "Alternatively run any OpenAI-compatible server on ${HOST}:${PORT}." >&2
   exit 1
 fi
