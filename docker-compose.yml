@@ -37,7 +37,7 @@ services:
       BACKEND_INTERNAL_API_KEY: ${BACKEND_INTERNAL_API_KEY:-dev-internal-key-change-me}
       CORS_ORIGINS: '["http://localhost:3001","http://frontend:3001"]'
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       db:
         condition: service_healthy
